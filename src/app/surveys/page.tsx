@@ -285,7 +285,7 @@ export default function SurveysPage() {
               {answeredSurveys.map((survey) => (
                 <Link
                   key={survey.id}
-                  href={`/surveys/${survey.id}/respond`}
+                  href={`/surveys/${survey.id}/summary`}
                   className="block rounded-2xl border border-[#E5D8C5] bg-white/80 p-5 transition hover:border-[#8B6F47] hover:shadow-md"
                 >
                   <h3 className="font-serif text-xl">{survey.title}</h3>
@@ -294,7 +294,7 @@ export default function SurveysPage() {
                       {survey.description}
                     </p>
                   )}
-                  <p className="mt-3 text-sm text-[#8B6F47]">View survey →</p>
+                  <p className="mt-3 text-sm text-[#8B6F47]">View summary →</p>
                 </Link>
               ))}
             </div>

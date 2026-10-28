@@ -212,12 +212,24 @@ function RespondToSurveyContent() {
           <section className="mt-8 rounded-2xl border border-[#E5D8C5] bg-white/80 p-8 text-center">
             <h1 className="font-serif text-3xl">Already completed</h1>
             <p className="mt-3">You've already submitted a response to this survey.</p>
+            <Link
+  href={`/surveys/${surveyId}/summary`}
+  className="mt-5 inline-block rounded-xl bg-[#6D5940] px-5 py-3 font-medium text-white"
+>
+  See all responses
+</Link>
           </section>
         ) : survey && success ? (
           <section className="mt-8 rounded-2xl border border-[#E5D8C5] bg-white/80 p-8 text-center">
             <p className="text-4xl">📚</p>
             <h1 className="mt-3 font-serif text-3xl">Thank you!</h1>
             <p className="mt-3">Your answers have been saved successfully.</p>
+            <Link
+  href={`/surveys/${surveyId}/summary`}
+  className="mt-5 inline-block rounded-xl bg-[#6D5940] px-5 py-3 font-medium text-white"
+>
+  See all responses
+</Link>
           </section>
         ) : survey ? (
           <>
