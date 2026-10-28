@@ -12,10 +12,13 @@ type Book = {
   title: string;
   author: string;
   status: BookStatus;
+  reading_version: string | null;
   rating: number;
   genre: string | null;
   notes: string | null;
   coverId?: number | null;
+  custom_cover_url?: string | null;
+  custom_cover_path?: string | null;
   color: string;
   initials: string;
   total_pages: number | null;
@@ -29,10 +32,13 @@ function decorateBook(book: {
   title: string;
   author: string;
   status: BookStatus;
+  reading_version: string | null;
   rating: number;
   genre: string | null;
   notes: string | null;
   coverId?: number | null;
+  custom_cover_url?: string | null;
+  custom_cover_path?: string | null;
   total_pages: number | null;
   current_page: number;
 }): Book {
@@ -51,6 +57,13 @@ function decorateBook(book: {
 export default function Home() {
   const router = useRouter();
   const [books, setBooks] = useState<Book[]>([]);
+
+  const [coverSuggestions, setCoverSuggestions] = useState<
+    Record<string, number[]>
+    >({});
+  const [savingCoverFor, setSavingCoverFor] = useState<string | null>(null);
+  const [manualCoverUrl, setManualCoverUrl] = useState<Record<string, string>>({});
+  const [uploadingCoverFor, setUploadingCoverFor] = useState<string | null>(null);
 
   const attemptedCoverLookups = useRef(new Set<string>());
   const [userId, setUserId] = useState<string | null>(null);
@@ -99,7 +112,7 @@ export default function Home() {
 
     const { data, error } = await supabase
       .from("books")
-      .select("id, title, author, status, rating, genre, notes, cover_id, total_pages, current_page")
+      .select("id, title, author, status, rating, genre, notes, cover_id, custom_cover_url, custom_cover_path, reading_version, total_pages, current_page")
       .eq("owner_id", ownerId)
       .order("created_at", { ascending: false });
 
@@ -109,22 +122,42 @@ export default function Home() {
       return;
     }
 
-    setBooks(
-      (data ?? []).map((book) =>
-        decorateBook({
-          id: book.id,
-          title: book.title,
-          author: book.author,
-          status: book.status as BookStatus,
-          rating: book.rating,
-          genre: book.genre,
-          coverId: book.cover_id,
-          notes: book.notes,
-          total_pages: book.total_pages,
-          current_page: book.current_page,
-        })
-      )
-    );
+    
+const loadedBooks = await Promise.all(
+  (data ?? []).map(async (book) => {
+    let signedCoverUrl: string | null = null;
+
+    if (book.custom_cover_path) {
+      const { data: signedData, error: signedError } =
+        await supabase.storage
+          .from("book-covers")
+          .createSignedUrl(book.custom_cover_path, 3600);
+
+      if (!signedError) {
+        signedCoverUrl = signedData.signedUrl;
+      }
+    }
+
+    return decorateBook({
+      id: book.id,
+      title: book.title,
+      author: book.author,
+      status: book.status as BookStatus,
+      reading_version: book.reading_version,
+      rating: book.rating,
+      genre: book.genre,
+      coverId: book.cover_id,
+      custom_cover_url: signedCoverUrl ?? book.custom_cover_url,
+      custom_cover_path: book.custom_cover_path,
+      notes: book.notes,
+      total_pages: book.total_pages,
+      current_page: book.current_page,
+    });
+  })
+);
+
+setBooks(loadedBooks);
+
     setIsLoading(false);
   }, []);
 
@@ -164,73 +197,74 @@ export default function Home() {
   }, [loadBooks, router]);
 
   
-  useEffect(() => {
-    if (!userId || books.length === 0) return;
+  
+useEffect(() => {
+  if (!userId || books.length === 0) return;
 
-    async function findMissingCovers() {
-      const foundCovers = new Map<string, number>();
+  let cancelled = false;
 
-      for (const book of books) {
-        if (
-          book.coverId != null ||
-          attemptedCoverLookups.current.has(book.id)
-        ) {
-          continue;
-        }
+  async function findMissingCovers() {
+    for (const book of books) {
+      if (
+        book.coverId != null ||
+        attemptedCoverLookups.current.has(book.id)
+      ) {
+        continue;
+      }
 
-        attemptedCoverLookups.current.add(book.id);
+      attemptedCoverLookups.current.add(book.id);
 
-        try {
-          const params = new URLSearchParams({
-            title: book.title,
-            author: book.author === "Uknown author" ? "" : book.author,
-            fields: "title,author_name,cover_i",
-            limit: "5",
-          });
+      try {
+        const params = new URLSearchParams({
+          title: book.title,
+          author:
+            book.author === "Unknown author" ? "" : book.author,
+          fields: "title,author_name,cover_i,language",
+          limit: "10",
+        });
 
-          const response = await fetch(
-            `https://openlibrary.org/search.json?${params.toString()}`
-          );
+        const response = await fetch(
+          `https://openlibrary.org/search.json?${params.toString()}`
+        );
 
-          if (!response.ok) continue;
+        if (!response.ok) continue;
 
-          
-          const result: {
-            docs?: {
-              title?: string;
-              author_name?: string[];
-              cover_i?: number;
-            }[];
-          } = await response.json();
+        const result: {
+          docs?: {
+            title?: string;
+            author_name?: string[];
+            cover_i?: number;
+            language?: string[];
+          }[];
+        } = await response.json();
 
-          const normalize = (value: string) =>
-            value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const normalize = (value: string) =>
+          value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-          const wantedTitle = normalize(book.title);
-          const wantedAuthor = normalize(book.author);
+        const wantedTitle = normalize(book.title);
+        const wantedAuthor = normalize(book.author);
 
-          const matchingBook = result.docs?.find((candidate) => {
-            if (
-              typeof candidate.cover_i !== "number" ||
-              !candidate.title
-            ) {
-              return false;
-            }
+        const candidates = (result.docs ?? []).filter((candidate) => {
+          if (
+            typeof candidate.cover_i !== "number" ||
+            !candidate.title
+          ) {
+            return false;
+          }
 
-            const foundTitle = normalize(candidate.title);
+          const foundTitle = normalize(candidate.title);
 
-            const titleMatches =
-              foundTitle === wantedTitle ||
-              foundTitle.includes(wantedTitle) ||
-              wantedTitle.includes(foundTitle);
+          const titleMatches =
+            foundTitle === wantedTitle ||
+            foundTitle.includes(wantedTitle) ||
+            wantedTitle.includes(foundTitle);
 
-            if (!titleMatches) return false;
+          if (!titleMatches) return false;
 
-            if (book.author === "Unknown author") return true;
-
+          if (book.author !== "Unknown author") {
             const authors = candidate.author_name ?? [];
 
-            return authors.some((author) => {
+            const authorMatches = authors.some((author) => {
               const foundAuthor = normalize(author);
 
               return (
@@ -239,45 +273,278 @@ export default function Home() {
                 wantedAuthor.includes(foundAuthor)
               );
             });
-          });
 
-          const coverId = matchingBook?.cover_i;
-
-          if (typeof coverId !== "number") continue;
-
-
-          const { error } = await supabase
-            .from("books")
-            .update({ cover_id: coverId })
-            .eq("id", book.id)
-            .eq("owner_id", userId);
-
-          if (error) {
-            console.error("Couldn't save book cover:", error.message);
-            continue;
+            if (!authorMatches) return false;
           }
 
-          foundCovers.set(book.id, coverId);
-        } catch (error) {
-          console.error("Couldn't look up book cover:", error);
-        }
-      }
+          return true;
+        });
 
-      if (foundCovers.size > 0) {
-        setBooks((current) =>
-          current.map((book) => {
-            const coverId = foundCovers.get(book.id);
+        // Prefer English editions, then show other matching editions.
+const sortedCandidates = [...candidates].sort((a, b) => {
+  const aEnglish = a.language?.includes("eng") ? 1 : 0;
+  const bEnglish = b.language?.includes("eng") ? 1 : 0;
+  return bEnglish - aEnglish;
+});
 
-            return coverId !== undefined
-              ? { ...book, coverId }
-              : book;
-          })
-        );
+const coverIds = Array.from(
+  new Set(
+    sortedCandidates
+      .map((candidate) => candidate.cover_i)
+      .filter((id): id is number => typeof id === "number")
+  )
+);
+
+if (!cancelled && coverIds.length > 0) {
+  setCoverSuggestions((current) => ({
+    ...current,
+    [book.id]: coverIds,
+  }));
+}
+      } catch (error) {
+        console.error("Couldn't look up book cover:", error);
       }
     }
+  }
 
-    void findMissingCovers();
-  }, [books, userId]);
+  void findMissingCovers();
+
+  return () => {
+    cancelled = true;
+  };
+}, [books, userId]);
+
+
+
+async function approveCover(book: Book) {
+  const coverId = coverSuggestions[book.id]?.[0];
+
+  if (coverId == null || !userId || savingCoverFor !== null) return;
+
+  setSavingCoverFor(book.id);
+  setMessage("");
+
+  try {
+    const { error } = await supabase
+      .from("books")
+      .update({ cover_id: coverId })
+      .eq("id", book.id)
+      .eq("owner_id", userId);
+
+    if (error) {
+      setMessage(`Couldn't save the cover: ${error.message}`);
+      return;
+    }
+
+    setBooks((current) =>
+      current.map((item) =>
+        item.id === book.id ? { ...item, coverId } : item
+      )
+    );
+
+    setCoverSuggestions((current) => {
+      const next = { ...current };
+      delete next[book.id];
+      return next;
+    });
+
+    setMessage(`Cover saved for "${book.title}".`);
+  } finally {
+    setSavingCoverFor(null);
+  }
+}
+
+
+async function saveManualCoverUrl(book: Book) {
+  const url = manualCoverUrl[book.id]?.trim();
+
+  if (!url || !userId || savingCoverFor !== null) return;
+
+  try {
+    const parsedUrl = new URL(url);
+
+    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+      setMessage("Please enter a valid image URL starting with http:// or https://.");
+      return;
+    }
+  } catch {
+    setMessage("Please enter a valid image URL.");
+    return;
+  }
+
+  setSavingCoverFor(book.id);
+  setMessage("");
+
+  try {
+    const { error } = await supabase
+      .from("books")
+      .update({
+        custom_cover_url: url,
+        custom_cover_path: null,
+      })
+      .eq("id", book.id)
+      .eq("owner_id", userId);
+
+    if (error) {
+      setMessage(`Couldn't save the manual cover: ${error.message}`);
+      return;
+    }
+
+    setBooks((current) =>
+      current.map((item) =>
+        item.id === book.id
+          ? { ...item, custom_cover_url: url, custom_cover_path: null }
+          : item
+      )
+    );
+
+    setCoverSuggestions((current) => {
+      const next = { ...current };
+      delete next[book.id];
+      return next;
+    });
+
+    setMessage(`Manual cover saved for "${book.title}".`);
+  } finally {
+    setSavingCoverFor(null);
+  }
+}
+
+
+async function uploadBookCover(book: Book, file: File) {
+  if (!userId || uploadingCoverFor !== null) return;
+
+  if (!file.type.startsWith("image/")) {
+    setMessage("Please choose an image file.");
+    return;
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    setMessage("Please choose an image smaller than 5 MB.");
+    return;
+  }
+
+  const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+  const safeExtension = /^[a-z0-9]+$/.test(extension) ? extension : "jpg";
+  const path = `${userId}/${book.id}-${Date.now()}.${safeExtension}`;
+
+  setUploadingCoverFor(book.id);
+  setMessage("");
+
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from("book-covers")
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: file.type,
+      });
+
+    if (uploadError) {
+      setMessage(`Couldn't upload the cover: ${uploadError.message}`);
+      return;
+    }
+
+    const { error: updateError } = await supabase
+      .from("books")
+      .update({
+        custom_cover_path: path,
+        custom_cover_url: null,
+      })
+      .eq("id", book.id)
+      .eq("owner_id", userId);
+
+    if (updateError) {
+      setMessage(`Image uploaded, but couldn't save it to the book: ${updateError.message}`);
+      return;
+    }
+
+    
+const { data: signedData, error: signedError } = await supabase.storage
+  .from("book-covers")
+  .createSignedUrl(path, 3600);
+
+if (signedError) {
+  setMessage(
+    `Cover uploaded and saved, but couldn't display it yet: ${signedError.message}`
+  );
+  return;
+}
+
+setBooks((current) =>
+  current.map((item) =>
+    item.id === book.id
+      ? {
+          ...item,
+          custom_cover_path: path,
+          custom_cover_url: signedData.signedUrl,
+        }
+      : item
+  )
+);
+
+
+    setCoverSuggestions((current) => {
+      const next = { ...current };
+      delete next[book.id];
+      return next;
+    });
+
+    setMessage(`Cover uploaded for "${book.title}".`);
+  } finally {
+    setUploadingCoverFor(null);
+  }
+}
+
+
+function skipCover(bookId: string) {
+  setCoverSuggestions((current) => {
+    const remaining = current[bookId] ?? [];
+
+    if (remaining.length <= 1) {
+      return current;
+    }
+
+    return {
+      ...current,
+      [bookId]: remaining.slice(1),
+    };
+  });
+}
+
+
+const readingVersionOptions = [
+  "Physical copy",
+  "Ebook",
+  "Audiobook",
+  "Library book",
+  "Immersive reading",
+];
+
+async function saveReadingVersion(book: Book, version: string) {
+  if (!userId) return;
+
+  const { error } = await supabase
+    .from("books")
+    .update({ reading_version: version || null })
+    .eq("id", book.id)
+    .eq("owner_id", userId);
+
+  if (error) {
+    setMessage(`Couldn't save reading version: ${error.message}`);
+    return;
+  }
+
+  setBooks((current) =>
+    current.map((item) =>
+      item.id === book.id
+        ? { ...item, reading_version: version || null }
+        : item
+    )
+  );
+
+  setMessage(`Reading version updated for "${book.title}".`);
+}
 
 
   const counts = {
@@ -314,7 +581,7 @@ export default function Home() {
   genre: newGenre.trim() || null,
   notes: newNotes.trim() || null,
 })
-    .select("id, title, author, status, rating, genre, notes, cover_id, total_pages, current_page")
+    .select("id, title, author, status, rating, genre, notes, cover_id, reading_version, total_pages, current_page")
     .single();
 
   setIsSaving(false);
@@ -330,6 +597,7 @@ export default function Home() {
       title: data.title,
       author: data.author,
       status: data.status as BookStatus,
+      reading_version: data.reading_version,
       rating: data.rating,
       genre: data.genre,
       coverId: data.cover_id,
@@ -414,7 +682,7 @@ async function saveBookEdits(
     })
     .eq("id", editingBookId)
     .eq("owner_id", userId)
-    .select("id, title, author, status, rating, genre, notes, cover_id, total_pages, current_page")
+    .select("id, title, author, status, rating, genre, notes, cover_id, reading_version, total_pages, current_page")
     .single();
 
   setIsSaving(false);
@@ -433,6 +701,7 @@ setBooks((current) =>
           title: data.title,
           author: data.author,
           status: data.status as BookStatus,
+          reading_version: data.reading_version,
           rating: data.rating,
           genre: data.genre,
           coverId: data.cover_id,
@@ -785,30 +1054,161 @@ setBooks((current) =>
               className="flex h-48 items-center justify-center overflow-hidden rounded-xl shadow-inner"
               style={{ backgroundColor: book.color }}
             >
-                    {book.coverId != null ? (
-                      <img
-                        src={`https://covers.openlibrary.org/b/id/${book.coverId}-M.jpg`}
-                        alt={`Cover of ${book.title}`}
-                        className="h-full w-full object-contain"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div
-                        className="flex h-36 w-28 flex-col items-center justify-center border border-white/50 px-3 text-center text-white shadow-lg"
-                        style={{ backgroundColor: book.color }}
-                      >
-                        <span className="mb-3 text-xs tracking-[0.3em] opacity-80">
-                          ✦ ✦ ✦
-                        </span>
-                        <span className="font-serif text-3xl">
-                          {book.initials}
-                        </span>
-                        <span className="mt-3 text-xs tracking-widest opacity-80">
-                          A STORY
-                        </span>
-                      </div>
-                    )}
-                  </Link>
+                    
+{book.custom_cover_url ? (
+  <img
+    src={book.custom_cover_url}
+    alt={`Cover of ${book.title}`}
+    className="h-full w-full object-contain"
+    loading="lazy"
+  />
+) : book.coverId != null ? (
+  <img
+    src={`https://covers.openlibrary.org/b/id/${book.coverId}-M.jpg`}
+    alt={`Cover of ${book.title}`}
+    className="h-full w-full object-contain"
+    loading="lazy"
+  />
+) : (
+  <div
+    className="flex h-36 w-28 flex-col items-center justify-center border border-white/50 px-3 text-center text-white shadow-lg"
+    style={{ backgroundColor: book.color }}
+  >
+    <span className="mb-3 text-xs tracking-[0.3em] opacity-80">
+      ✦ ✦ ✦
+    </span>
+    <span className="font-serif text-3xl">
+      {book.initials}
+    </span>
+    <span className="mt-3 text-xs tracking-widest opacity-80">
+      A STORY
+    </span>
+  </div>
+)}
+</Link>
+
+                   
+
+{book.coverId == null &&
+  !book.custom_cover_url &&
+  !book.custom_cover_path && (
+  <div className="mt-3 rounded-xl border border-[#DCCFBD] bg-[#FBF8F2] p-3">
+    {(coverSuggestions[book.id]?.length ?? 0) > 0 && (
+      <>
+        <p className="mb-2 text-sm font-medium text-[#75634D]">
+          Suggested cover — check the language and edition
+        </p>
+
+        <img
+          src={`https://covers.openlibrary.org/b/id/${coverSuggestions[book.id][0]}-M.jpg`}
+          alt={`Suggested cover for ${book.title}`}
+          className="mb-3 h-36 w-auto rounded object-contain"
+          loading="lazy"
+        />
+
+        <div className="relative z-10 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              skipCover(book.id);
+            }}
+            disabled={savingCoverFor !== null}
+            className="cursor-pointer rounded-full border border-[#D8CCBA] bg-white px-4 py-2 text-sm text-[#75634D] hover:bg-[#EEE6D9] disabled:opacity-60"
+          >
+            Skip
+          </button>
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              approveCover(book);
+            }}
+            disabled={savingCoverFor !== null}
+            className="cursor-pointer rounded-full bg-[#75634D] px-4 py-2 text-sm text-white hover:bg-[#5D4C39] disabled:opacity-60"
+          >
+            {savingCoverFor === book.id ? "Saving..." : "Use this cover"}
+          </button>
+        </div>
+      </>
+    )}
+
+    <div className="mt-4 border-t border-[#DCCFBD] pt-3">
+      <label
+        htmlFor={`manual-cover-url-${book.id}`}
+        className="mb-2 block text-sm font-medium text-[#75634D]"
+      >
+        { (coverSuggestions[book.id]?.length ?? 0) > 0
+          ? "None of these covers is right? Paste an image URL"
+          : "No suggested covers? Paste an image URL"}
+      </label>
+
+      <input
+        id={`manual-cover-url-${book.id}`}
+        type="url"
+        value={manualCoverUrl[book.id] ?? ""}
+        onChange={(event) =>
+          setManualCoverUrl((current) => ({
+            ...current,
+            [book.id]: event.target.value,
+          }))
+        }
+        placeholder="https://example.com/cover.jpg"
+        className="w-full rounded-lg border border-[#D8CCBA] bg-white px-3 py-2 text-sm text-[#4A4035]"
+      />
+
+      <button
+        type="button"
+        onClick={() => saveManualCoverUrl(book)}
+        disabled={
+          !manualCoverUrl[book.id]?.trim() ||
+          savingCoverFor !== null
+        }
+        className="mt-2 cursor-pointer rounded-full border border-[#D8CCBA] bg-white px-4 py-2 text-sm text-[#75634D] hover:bg-[#EEE6D9] disabled:opacity-60"
+      >
+        {savingCoverFor === book.id ? "Saving..." : "Save image URL"}
+      </button>
+    </div>
+
+    <div className="mt-4 border-t border-[#DCCFBD] pt-3">
+      <label
+        htmlFor={`upload-cover-${book.id}`}
+        className="mb-2 block text-sm font-medium text-[#75634D]"
+      >
+        Or upload a cover image from your computer
+      </label>
+
+      <input
+        id={`upload-cover-${book.id}`}
+        type="file"
+        accept="image/*"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+
+          if (file) {
+            void uploadBookCover(book, file);
+          }
+
+          event.currentTarget.value = "";
+        }}
+        disabled={uploadingCoverFor !== null}
+        className="block w-full text-sm text-[#75634D] file:mr-3 file:cursor-pointer file:rounded-full file:border-0 file:bg-[#75634D] file:px-4 file:py-2 file:text-white disabled:opacity-60"
+      />
+
+      {uploadingCoverFor === book.id && (
+        <p className="mt-2 text-sm text-[#75634D]">
+          Uploading cover...
+        </p>
+      )}
+    </div>
+  </div>
+)}
+
+
+    
 
 {book.total_pages != null && book.total_pages > 0 && (
   <div className="mt-3">
@@ -862,6 +1262,33 @@ setBooks((current) =>
                     <p className="mt-1 text-sm text-[#968672]">
                       {book.author}
                     </p>
+
+                    
+<div className="mt-3">
+  <label
+    htmlFor={`reading-version-${book.id}`}
+    className="mb-1 block text-sm font-medium text-[#75634D]"
+  >
+    Which version are you reading?
+  </label>
+
+  <select
+    id={`reading-version-${book.id}`}
+    value={book.reading_version ?? ""}
+    onChange={(event) =>
+      void saveReadingVersion(book, event.target.value)
+    }
+    className="w-full rounded-xl border border-[#DCCFBD] bg-white px-3 py-2 text-sm text-[#75634D] outline-none focus:border-[#9B866A]"
+  >
+    <option value="">Choose a version</option>
+    {readingVersionOptions.map((version) => (
+      <option key={version} value={version}>
+        {version}
+      </option>
+    ))}
+  </select>
+</div>
+
                     
                     {book.genre && (
                       <span className="mt-3 inline-block rounded-full bg-[#E8E1D4] px-3 py-1 text-xs text-[#75634D]">

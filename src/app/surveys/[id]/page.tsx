@@ -5,9 +5,11 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { RecommendationsEditor } from "@/components/Recommendations";
 
 type Survey = {
   id: string;
+  owner_id: string;
   title: string;
   description: string | null;
   is_public: boolean;
@@ -73,7 +75,7 @@ function SurveyDetailContent() {
 
     const { data: surveyData, error: surveyError } = await supabase
       .from("surveys")
-      .select("id, title, description, is_public, book_id, book_title, book_author, book_cover_id")
+      .select("id, owner_id, title, description, is_public, book_id, book_title, book_author, book_cover_id")
       .eq("id", surveyId)
       .single();
 
@@ -83,12 +85,18 @@ function SurveyDetailContent() {
       return;
     }
 
+     if (surveyData.owner_id !== user.id) {
+      router.replace(`/surveys/${surveyId}/respond`);
+      return;
+    }
+
     setSurvey(surveyData);
     setSelectedBookId(surveyData.book_id ?? "");
 
     const {data: booksData, error: booksError} = await supabase
       .from("books")
       .select("id, title, author, cover_id")
+      .eq("owner_id", user.id)
       .order("title", {ascending: true});
 
     if (booksError) {
@@ -149,7 +157,7 @@ function SurveyDetailContent() {
     })
     .eq("id", surveyId)
     .eq("owner_id", user.id)
-    .select("id, title, description, is_public, book_id, book_title, book_author, book_cover_id")
+    .select("id, owner_id, title, description, is_public, book_id, book_title, book_author, book_cover_id")
     .single();
 
   if (error || !data) {
@@ -689,9 +697,17 @@ async function copySurveyLink() {
       >
         Copy survey link
       </button>
+            <Link
+        href={`/surveys/${surveyId}/responses`}
+        className="mt-3 ml-2 inline-block rounded-lg bg-[#6B705C] px-4 py-2 text-sm text-white hover:bg-[#555949]"
+      >
+        View Responses
+      </Link>
     </div>
   )}
  </section>
+
+            <RecommendationsEditor surveyId={surveyId} />
 
             <section className="mb-8 rounded-2xl border border-[#E5D8C5] bg-white/80 p-6">
               <h2 className="mb-4 font-serif text-2xl">
@@ -921,7 +937,7 @@ async function copySurveyLink() {
   );
 }
 
-export default function SurveyDetailPAge() {
+export default function SurveyDetailPage() {
   return (
     <Suspense fallback={<main className="p-8">Loading survey...</main>}>
       <SurveyDetailContent />

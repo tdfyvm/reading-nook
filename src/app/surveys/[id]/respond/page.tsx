@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import SurveyBookHeader from "@/components/SurveyBookHeader";
+import { RecommendationsList } from "@/components/Recommendations";
 
 
 type Question = {
@@ -312,6 +313,8 @@ function RespondToSurveyContent() {
                 </button>
               </form>
             )}
+
+            <RecommendationsList surveyId={surveyId} />
           </>
         ) : (
           <p className="mt-8">Survey unavailable.</p>

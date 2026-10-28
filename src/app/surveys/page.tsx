@@ -27,6 +27,7 @@ export default function SurveysPage() {
   const [surveyDescription, setSurveyDescription] = useState("");
   const [savingSurvey, setSavingSurvey] = useState(false);
   const [formError, setFormError] = useState("");
+  const [answeredSurveys, setAnsweredSurveys] = useState<Survey[]>([]);
 
 
   const loadSurveys = useCallback(async () => {
@@ -43,9 +44,10 @@ export default function SurveysPage() {
       return;
     }
 
-    const { data, error } = await supabase
+        const { data, error } = await supabase
       .from("surveys")
       .select("id, title, description, book_id, is_public, created_at")
+      .eq("owner_id", user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -54,7 +56,30 @@ export default function SurveysPage() {
       return;
     }
 
-    setSurveys(data ?? []);
+    const mySurveys = data ?? [];
+    setSurveys(mySurveys);
+
+    const { data: responseRows } = await supabase
+      .from("survey_responses")
+      .select("survey_id")
+      .eq("respondent_id", user.id);
+
+    const answeredIds = (responseRows ?? [])
+      .map((row) => row.survey_id as string)
+      .filter((id) => !mySurveys.some((survey) => survey.id === id));
+
+    if (answeredIds.length > 0) {
+      const { data: answeredData } = await supabase
+        .from("surveys")
+        .select("id, title, description, book_id, is_public, created_at")
+        .in("id", answeredIds)
+        .order("created_at", { ascending: false });
+
+      setAnsweredSurveys(answeredData ?? []);
+    } else {
+      setAnsweredSurveys([]);
+    }
+
     setIsLoading(false);
   }, [router]);
   
@@ -250,6 +275,30 @@ export default function SurveysPage() {
               </Link>
             ))}
           </div>
+        )}
+      
+
+        {!isLoading && !errorMessage && answeredSurveys.length > 0 && (
+          <section className="mt-12">
+            <h2 className="font-serif text-2xl">Surveys I&apos;ve answered</h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {answeredSurveys.map((survey) => (
+                <Link
+                  key={survey.id}
+                  href={`/surveys/${survey.id}/respond`}
+                  className="block rounded-2xl border border-[#E5D8C5] bg-white/80 p-5 transition hover:border-[#8B6F47] hover:shadow-md"
+                >
+                  <h3 className="font-serif text-xl">{survey.title}</h3>
+                  {survey.description && (
+                    <p className="mt-2 text-sm text-[#786956]">
+                      {survey.description}
+                    </p>
+                  )}
+                  <p className="mt-3 text-sm text-[#8B6F47]">View survey →</p>
+                </Link>
+              ))}
+            </div>
+          </section>
         )}
       </div>
     </main>
