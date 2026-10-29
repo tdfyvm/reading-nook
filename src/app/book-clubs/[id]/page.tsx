@@ -17,6 +17,7 @@ type Member = {
   user_id: string;
   role: string;
   joined_at: string;
+  username: string | null;
 };
 
 type Friend = { id: string; username: string };
@@ -68,11 +69,10 @@ function BookClubDetailsContent() {
         return;
       }
 
-      const { data: memberData, error: memberError } = await supabase
-        .from("book_club_members")
-        .select("user_id, role, joined_at")
-        .eq("club_id", id)
-        .order("joined_at", { ascending: true });
+      const { data: memberData, error: memberError } = await supabase.rpc(
+        "get_club_members",
+        { p_club_id: id}
+      );
 
       if (cancelled) return;
 
@@ -190,10 +190,11 @@ function BookClubDetailsContent() {
     (friend) => !members.some((member) => member.user_id === friend.id)
   );
 
-  function memberName(member: Member) {
-    if (member.user_id === currentUserId) return "You";
-    const friend = friends.find((item) => item.id === member.user_id);
-    return friend ? friend.username : `Member ${member.user_id.slice(0, 8)}`;
+    function memberName(member: Member) {
+    if (member.user_id === currentUserId) {
+      return member.username ? `${member.username} (you)` : "You";
+    }
+    return member.username ?? `Member ${member.user_id.slice(0, 8)}`;
   }
 
   return (
