@@ -4,8 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import CoverField from "@/components/CoverField";
+import { uploadCover } from "@/lib/uploadCover";
+import StarRating from "@/components/StarRating";
+import ReadingDates, {
+  ReadingDatesDraft,
+  type DraftReading,
+} from "@/components/ReadingDates";
 
-type BookStatus = "Reading" | "Read" | "Want to read";
+type BookStatus = "Reading" | "Rereading" | "Read" | "Want to read";
 
 type Book = {
   id: string;
@@ -69,20 +76,51 @@ export default function Home() {
   const [userId, setUserId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All books");
+
+  const [readingDates, setReadingDates] = useState<Record<string, string>>({});
+  const [dateOrder, setDateOrder] = useState<"newest" | "oldest">("newest");
   
   const filteredBooks = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  const query = search.trim().toLowerCase();
 
-    return books.filter((book) => {
-      const matchesSearch =
-        book.title.toLowerCase().includes(query) ||
-        book.author.toLowerCase().includes(query);
+  const list = books.filter((book) => {
+    const matchesSearch =
+      book.title.toLowerCase().includes(query) ||
+      book.author.toLowerCase().includes(query);
 
-      const matchesStatus = filter === "All books" || book.status === filter;
+    const matchesStatus = filter === "All books" || book.status === filter;
 
-      return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus;
+  });
+
+  const byTitle = (a: Book, b: Book) =>
+    a.title.localeCompare(b.title, undefined, {
+      sensitivity: "base",
+      numeric: true,
     });
-  }, [books, search, filter]);
+
+  if (filter === "Reading" || filter === "Want to read") {
+    return [...list].sort(byTitle);
+  }
+
+  if (filter === "Read" || filter === "Rereading") {
+    return [...list].sort((a, b) => {
+      const dateA = readingDates[a.id];
+      const dateB = readingDates[b.id];
+
+      if (!dateA && !dateB) return byTitle(a, b);
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+
+      const compared = dateA.localeCompare(dateB);
+      if (compared === 0) return byTitle(a, b);
+
+      return dateOrder === "newest" ? -compared : compared;
+    });
+  }
+
+  return list;
+}, [books, search, filter, readingDates, dateOrder]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -95,6 +133,8 @@ export default function Home() {
   const [newRating, setNewRating] = useState(0);
   const [newGenre, setNewGenre] = useState("");
   const [newNotes, setNewNotes] = useState("");
+  const [newFormat, setNewFormat] = useState("");
+  const [newReadings, setNewReadings] = useState<DraftReading[]>([]);
   const [editingBookId, setEditingBookId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editAuthor, setEditAuthor] = useState("");
@@ -105,6 +145,9 @@ export default function Home() {
 
   const [editGenre, setEditGenre] = useState("");
   const [editNotes, setEditNotes] = useState("");
+
+  const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [editRemoveCover, setEditRemoveCover] = useState(false);
 
   const loadBooks = useCallback(async (ownerId: string) => {
     setIsLoading(true);
@@ -314,6 +357,40 @@ if (!cancelled && coverIds.length > 0) {
   };
 }, [books, userId]);
 
+useEffect(() => {
+  if (!userId || editingBookId !== null) return;
+
+  const ownerId = userId;
+  let cancelled = false;
+
+  async function loadReadingDates() {
+    const { data, error } = await supabase
+      .from("book_readings")
+      .select("book_id, start_date, end_date")
+      .eq("owner_id", ownerId);
+
+    if (cancelled || error) return;
+
+    const latest: Record<string, string> = {};
+
+    for (const row of data ?? []) {
+      const date = (row.end_date ?? row.start_date) as string;
+      const bookId = row.book_id as string;
+
+      if (!latest[bookId] || date > latest[bookId]) {
+        latest[bookId] = date;
+      }
+    }
+
+    setReadingDates(latest);
+  }
+
+  void loadReadingDates();
+
+  return () => {
+    cancelled = true;
+  };
+}, [userId, editingBookId, books.length]);
 
 
 async function approveCover(book: Book) {
@@ -550,6 +627,7 @@ async function saveReadingVersion(book: Book, version: string) {
   const counts = {
     all: books.length,
     reading: books.filter((book) => book.status === "Reading").length,
+    rereading: books.filter((book) => book.status === "Rereading").length,
     read: books.filter((book) => book.status === "Read").length,
     wishlist: books.filter((book) => book.status === "Want to read").length,
   };
@@ -580,8 +658,9 @@ async function saveReadingVersion(book: Book, version: string) {
   rating: newRating,
   genre: newGenre.trim() || null,
   notes: newNotes.trim() || null,
+  format: newFormat || null,
 })
-    .select("id, title, author, status, rating, genre, notes, cover_id, reading_version, total_pages, current_page")
+    .select("id, title, author, status, rating, genre, notes, cover_id, custom_cover_url, reading_version, total_pages, current_page")
     .single();
 
   setIsSaving(false);
@@ -589,6 +668,23 @@ async function saveReadingVersion(book: Book, version: string) {
   if (error) {
     setMessage(`Couldn't save your book: ${error.message}`);
     return;
+  }
+
+    if (newReadings.length > 0) {
+    const { error: readingsError } = await supabase
+      .from("book_readings")
+      .insert(
+        newReadings.map((reading) => ({
+          book_id: data.id,
+          owner_id: userId,
+          start_date: reading.start_date,
+          end_date: reading.end_date,
+        }))
+      );
+
+    if (readingsError) {
+      console.error("Couldn't save reading dates:", readingsError.message);
+    }
   }
 
   setBooks((current) => [
@@ -601,6 +697,7 @@ async function saveReadingVersion(book: Book, version: string) {
       rating: data.rating,
       genre: data.genre,
       coverId: data.cover_id,
+      custom_cover_url: data.custom_cover_url,
       notes: data.notes,
       total_pages: data.total_pages,
       current_page: data.current_page,
@@ -616,6 +713,8 @@ async function saveReadingVersion(book: Book, version: string) {
   setNewRating(0);
   setNewGenre("");
   setNewNotes("");
+  setNewReadings([]);
+  setNewFormat("");
   setIsAddFormOpen(false);
   setMessage(`"${title}" was added to your bookshelf.`);
 }
@@ -626,6 +725,8 @@ function startEditing(book: Book) {
   setEditAuthor(book.author);
   setEditStatus(book.status);
   setEditRating(book.rating);
+  setEditCoverFile(null);
+  setEditRemoveCover(false);
   
 setEditTotalPages(
   book.total_pages == null ? "" : String(book.total_pages)
@@ -664,6 +765,25 @@ async function saveBookEdits(
   setIsSaving(true);
   setMessage("");
 
+  let customCoverUrl: string | null = 
+    books.find((item) => item.id === editingBookId)?.custom_cover_url ?? null;
+
+  if (editRemoveCover) customCoverUrl = null;
+
+  if (editCoverFile) {
+    try {
+      customCoverUrl = await uploadCover (editCoverFile, userId);
+    } catch (oploadError) {
+      setIsSaving(false);
+      setMessage(
+        oploadError instanceof Error
+          ? oploadError.message 
+          : "Couldn't upload the cover."
+      );
+      return;
+    }
+  }
+
   const { data, error } = await supabase
     .from("books")
     .update({
@@ -678,11 +798,12 @@ async function saveBookEdits(
         ? null
         : Number(editTotalPages),
         current_page: Number(editCurrentPage || 0),
+      custom_cover_url: customCoverUrl,
       updated_at: new Date().toISOString(),
     })
     .eq("id", editingBookId)
     .eq("owner_id", userId)
-    .select("id, title, author, status, rating, genre, notes, cover_id, reading_version, total_pages, current_page")
+    .select("id, title, author, status, rating, genre, notes, cover_id, custom_cover_url, reading_version, total_pages, current_page")
     .single();
 
   setIsSaving(false);
@@ -705,6 +826,7 @@ setBooks((current) =>
           rating: data.rating,
           genre: data.genre,
           coverId: data.cover_id,
+          custom_cover_url: data.custom_cover_url,
           notes: data.notes,
           total_pages: data.total_pages,
           current_page: data.current_page,
@@ -773,7 +895,7 @@ setBooks((current) =>
             Your library
           </p>
           <nav className="space-y-2">
-            {["All books", "Reading", "Read", "Want to read"].map((item) => (
+            {["All books", "Reading", "Rereading", "Read", "Want to read"].map((item) => (
               <button
                 key={item}
                 onClick={() => setFilter(item)}
@@ -788,6 +910,8 @@ setBooks((current) =>
                     ? "▤"
                     : item === "Reading"
                       ? "◷"
+                    :item === "Rereading"
+                      ? "↻"
                       : item === "Read"
                         ? "✓"
                         : "♡"}
@@ -821,6 +945,34 @@ setBooks((current) =>
   </div>
 
   <div className="flex flex-wrap gap-2">
+    
+<Link
+  href="/stats"
+  className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
+>
+  Reading Stats
+</Link>
+
+            <Link
+      href="/friends"
+      className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
+    >
+      Friends
+    </Link>
+        <Link
+      href="/calendar"
+      className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
+    >
+      Reading calendar
+    </Link>
+    
+    <Link
+       href="/book-clubs"
+       className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
+     >
+      Book clubs
+    </Link>
+
     <Link
       href="/surveys"
       className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
@@ -828,13 +980,12 @@ setBooks((current) =>
         My Book Surveys
       </Link>
     
-    <button
-      type="button"
-      onClick={signOut}
+        <Link
+      href="/profile"
       className="rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
     >
-      Sign out
-    </button>
+      My profile
+    </Link>
 
     <button
       type="button"
@@ -848,11 +999,12 @@ setBooks((current) =>
 </header>
 
 
-          <div className="mb-10 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="mb-10 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard label="Total books" value={counts.all} icon="📚" />
             <StatCard label="Currently reading" value={counts.reading} icon="☕" />
-            <StatCard label="Finished" value={counts.read} icon="✿" />
-            <StatCard label="On your wishlist" value={counts.wishlist} icon="♡" />
+            <StatCard label="Rereading" value={counts.rereading} icon="↻" />
+            <StatCard label="Finished" value={counts.read} icon="🧸" />
+            <StatCard label="In your library" value={counts.wishlist} icon="𓍢ִ໋🀦" />
           </div>
 
 {isAddFormOpen && (
@@ -920,29 +1072,17 @@ setBooks((current) =>
         </select>
       </div>
 
-      <div>
-        <label className="mb-2 block text-sm font-medium">
-          Your rating
-        </label>
-        <div className="flex gap-2" role="group" aria-label="Book rating">
-          {[1, 2, 3, 4, 5].map((star) => (
-            <button
-              key={star}
-              type="button"
-              onClick={() => setNewRating(star === newRating ? 0 : star)}
-              aria-label={`${star} star${star === 1 ? "" : "s"}`}
-              aria-pressed={newRating === star}
-              className={`text-3xl transition hover:scale-110 ${
-                star <= newRating ? "text-[#B68E4A]" : "text-[#D8CEBD]"
-              }`}
-            >
-              ★
-            </button>
-          ))}
-          <span className="self-center text-sm text-[#8C7D6A]">
-            {newRating === 0 ? "Not rated" : `${newRating} out of 5`}
-          </span>
-        </div>
+            <div>
+        <p className="mb-2 block text-sm font-medium">Your rating</p>
+        <StarRating value={newRating} onChange={setNewRating} />
+      </div>
+
+            <div>
+        <p className="mb-2 block text-sm font-medium">
+          Reading dates{" "}
+          <span className="font-normal text-[#9B8B78]">(optional)</span>
+        </p>
+        <ReadingDatesDraft value={newReadings} onChange={setNewReadings} />
       </div>
 
       <div>
@@ -1021,7 +1161,7 @@ setBooks((current) =>
           </div>
 
           <div className="mb-6 flex flex-wrap gap-2">
-            {["All books", "Reading", "Read", "Want to read"].map((item) => (
+            {["All books", "Reading", "Rereading", "Read", "Want to read"].map((item) => (
               <button
                 key={item}
                 onClick={() => setFilter(item)}
@@ -1036,6 +1176,27 @@ setBooks((current) =>
             ))}
           </div>
 
+          {(filter === "Read" || filter === "Rereading") && (
+  <div className="mb-6 flex flex-wrap items-center gap-2 text-sm text-[#837461]">
+    <label htmlFor="date-order">Sort by reading date:</label>
+    <select
+      id="date-order"
+      value={dateOrder}
+      onChange={(event) =>
+        setDateOrder(event.target.value as "newest" | "oldest")
+      }
+      className="rounded-xl border border-[#DCCFBD] bg-white px-3 py-2 text-sm text-[#4A3B2B] outline-none focus:border-[#8B6F47]"
+    >
+      <option value="newest">Most recent first</option>
+      <option value="oldest">Oldest first</option>
+    </select>
+  </div>
+)}
+
+{(filter === "Reading" || filter === "Want to read") && (
+  <p className="mb-6 text-sm text-[#9B8B78]">Sorted alphabetically (A–Z)</p>
+)}
+
           {isLoading ? (
             <div className="rounded-2xl border border-dashed border-[#DCCFBD] p-12 text-center">
               <div className="mb-3 text-3xl">📖</div>
@@ -1049,42 +1210,54 @@ setBooks((current) =>
                   className="group rounded-2xl border border-[#EBE2D5] bg-white/70 p-4 transition hover:-translate-y-1 hover:shadow-lg hover:shadow-[#6D5940]/5"
                 >
                   
-            <Link
-              href={`/books/${book.id}`}
-              className="flex h-48 items-center justify-center overflow-hidden rounded-xl shadow-inner"
-              style={{ backgroundColor: book.color }}
-            >
-                    
-{book.custom_cover_url ? (
-  <img
-    src={book.custom_cover_url}
-    alt={`Cover of ${book.title}`}
-    className="h-full w-full object-contain"
-    loading="lazy"
-  />
-) : book.coverId != null ? (
-  <img
-    src={`https://covers.openlibrary.org/b/id/${book.coverId}-M.jpg`}
-    alt={`Cover of ${book.title}`}
-    className="h-full w-full object-contain"
-    loading="lazy"
-  />
-) : (
-  <div
-    className="flex h-36 w-28 flex-col items-center justify-center border border-white/50 px-3 text-center text-white shadow-lg"
-    style={{ backgroundColor: book.color }}
-  >
-    <span className="mb-3 text-xs tracking-[0.3em] opacity-80">
-      ✦ ✦ ✦
-    </span>
-    <span className="font-serif text-3xl">
-      {book.initials}
-    </span>
-    <span className="mt-3 text-xs tracking-widest opacity-80">
-      A STORY
-    </span>
-  </div>
-)}
+                  <Link
+  href={`/books/${book.id}`}
+  className="relative flex h-48 items-center justify-center overflow-hidden rounded-xl shadow-inner"
+  style={{ backgroundColor: book.color }}
+>
+  {(() => {
+    const coverSrc = book.custom_cover_url
+      ? book.custom_cover_url
+      : book.coverId != null
+        ? `https://covers.openlibrary.org/b/id/${book.coverId}-M.jpg`
+        : null;
+
+    if (!coverSrc) return null;
+
+    return (
+      <>
+        <img
+          src={coverSrc}
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 h-full w-full scale-125 object-cover blur-xl"
+          loading="lazy"
+        />
+        <div className="absolute inset-0 bg-black/10" aria-hidden="true" />
+        <img
+          src={coverSrc}
+          alt={`Cover of ${book.title}`}
+          className="relative h-full w-full object-contain drop-shadow-lg"
+          loading="lazy"
+        />
+      </>
+    );
+  })()}
+
+  {!book.custom_cover_url && book.coverId == null && (
+      <div
+      className="flex h-36 w-28 flex-col items-center justify-center border border-white/50 px-3 text-center text-white shadow-lg"
+      style={{ backgroundColor: book.color }}
+    >
+      <span className="mb-3 text-xs tracking-[0.3em] opacity-80">
+        ✦ ✦ ✦
+      </span>
+      <span className="font-serif text-3xl">{book.initials}</span>
+      <span className="mt-3 text-xs tracking-widest opacity-80">
+        A STORY
+      </span>
+    </div>
+  )}
 </Link>
 
                    
@@ -1332,6 +1505,8 @@ setBooks((current) =>
   })}
 </div>
 
+{editingBookId !== book.id && <ReadingDates bookId={book.id} />}
+
                     
                     {editingBookId === book.id && (
                       <form
@@ -1382,6 +1557,7 @@ setBooks((current) =>
                           >
                             <option value="Want to read">Want to read</option>
                             <option value="Reading">Reading</option>
+                            <option value="Rereading">Rereading</option>  
                             <option value="Read">Read</option>
                           </select>
                         </div>
@@ -1413,7 +1589,17 @@ setBooks((current) =>
 })}
                           </select>
                         </div>
+                                  <CoverField
+                          title={book.title}
+                          customUrl={book.custom_cover_url ?? null}
+                          coverId={book.coverId ?? null}
+                          file={editCoverFile}
+                          remove={editRemoveCover}
+                          onFileChange={setEditCoverFile}
+                          onRemoveChange={setEditRemoveCover}
+                        />
 
+<ReadingDates bookId={book.id} editable />
 
 <div>
   <label className="mb-1 block text-sm font-medium">

@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+
+
+@keyframes reading-confetti-fall {
+  0% {
+    transform: translate3d(0, -30px, 0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(25px, 420px, 0) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+.reading-confetti {
+  animation: reading-confetti-fall 3s linear infinite;
+  will-change: transform, opacity;
+}
+

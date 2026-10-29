@@ -4,8 +4,12 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import CoverField from "@/components/CoverField";
+import { uploadCover } from "@/lib/uploadCover";
+import ReadingDates from "@/components/ReadingDates";
+import BookFormatField from "@/components/Formats";
 
-type BookStatus = "Reading" | "Read" | "Want to read";
+type BookStatus = "Reading" | "Rereading" | "Read" | "Want to read";
 
 type Book = {
   id: string;
@@ -17,6 +21,7 @@ type Book = {
   description: string | null;
   notes: string | null;
   cover_id: number | null;
+  custom_cover_url: string | null;
   total_pages: number | null;
   current_page: number;
 };
@@ -58,6 +63,9 @@ function BookDetailContent() {
   const [editDescription, setEditDescription] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
+  const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [editRemoveCover, setEditRemoveCover] = useState(false);
+
   function fillEditFields(loadedBook: Book) {
     setEditTitle(loadedBook.title);
     setEditAuthor(loadedBook.author);
@@ -70,6 +78,9 @@ function BookDetailContent() {
     setEditGenre(loadedBook.genre ?? "");
     setEditDescription(loadedBook.description ?? "");
     setEditNotes(loadedBook.notes ?? "");
+
+    setEditCoverFile(null);
+    setEditRemoveCover(false);
   }
 
   async function loadQuotes(bookId: string) {
@@ -183,6 +194,34 @@ function BookDetailContent() {
 
     setSaving(true);
 
+        let customCoverUrl: string | null = book.custom_cover_url ?? null;
+
+    if (editRemoveCover) customCoverUrl = null;
+
+    if (editCoverFile) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.alert("Please sign in again before saving.");
+        setSaving(false);
+        return;
+      }
+
+      try {
+        customCoverUrl = await uploadCover(editCoverFile, user.id);
+      } catch (uploadError) {
+        window.alert(
+          uploadError instanceof Error
+            ? uploadError.message
+            : "Couldn't upload the cover."
+        );
+        setSaving(false);
+        return;
+      }
+    }
+
     try {
       const { data, error: updateError } = await supabase
         .from("books")
@@ -196,11 +235,12 @@ function BookDetailContent() {
           notes: editNotes.trim() || null,
           total_pages: totalPages,
           current_page: currentPage,
+          custom_cover_url: customCoverUrl,
           updated_at: new Date().toISOString(),
         })
         .eq("id", book.id)
         .select(
-          "id, title, author, status, rating, genre, description, notes, cover_id, total_pages, current_page"
+          "id, title, author, status, rating, genre, description, notes, cover_id, custom_cover_url, total_pages, current_page"
         )
         .single();
 
@@ -239,7 +279,7 @@ function BookDetailContent() {
       const { data, error: bookError } = await supabase
         .from("books")
         .select(
-          "id, title, author, status, rating, genre, description, notes, cover_id, total_pages, current_page"
+          "id, title, author, status, rating, genre, description, notes, cover_id, custom_cover_url, total_pages, current_page"
         )
         .eq("id", params.id)
         .maybeSingle();
@@ -304,9 +344,12 @@ function BookDetailContent() {
         <div className="mt-8 grid gap-8 md:grid-cols-[240px_1fr]">
           <div>
             <div className="overflow-hidden rounded-xl bg-[#e8ddcc] shadow-lg">
-              {book.cover_id != null ? (
+              {book.custom_cover_url || book.cover_id != null ? (
                 <img
-                  src={`https://covers.openlibrary.org/b/id/${book.cover_id}-L.jpg`}
+                  src={
+                    book.custom_cover_url ??
+                    `https://covers.openlibrary.org/b/id/${book.cover_id}-L.jpg`
+                  }
                   alt={`Cover of ${book.title}`}
                   className="w-full object-contain"
                 />
@@ -371,6 +414,7 @@ function BookDetailContent() {
                     >
                       <option value="Want to read">Want to read</option>
                       <option value="Reading">Reading</option>
+                      <option value="Rereading">Rereading</option>
                       <option value="Read">Read</option>
                     </select>
                   </label>
@@ -400,6 +444,23 @@ function BookDetailContent() {
                       })}
                     </select>
                   </label>
+
+                  <CoverField
+                    title={editTitle || book.title}
+                    customUrl={book.custom_cover_url}
+                    coverId={book.cover_id}
+                    file={editCoverFile}
+                    remove={editRemoveCover}
+                    onFileChange={setEditCoverFile}
+                    onRemoveChange={setEditRemoveCover}
+                  />
+
+                  <ReadingDates bookId={book.id} editable />
+                  <BookFormatField bookId={book.id} />
+
+                  <label className="block text-sm">
+                    Genre
+                    </label>
 
                   <label className="block text-sm">
                     Genre
@@ -523,6 +584,12 @@ function BookDetailContent() {
                 {book.rating} out of 5 stars
               </p>
             </section>
+
+            {!isEditing && (
+  <section className="mt-8">
+    <ReadingDates bookId={book.id} />
+  </section>
+)}
 
             <section className="mt-8">
               <h2 className="font-serif text-xl">Reading progress</h2>
