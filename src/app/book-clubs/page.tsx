@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import ClubInvitations from "@/components/ClubInvitations";
 
 type BookClub = {
   id: string;
@@ -108,7 +109,14 @@ export default function BookClubsPage() {
           <p className="mt-3 max-w-2xl text-[#75634D]">
             A little corner to read, share and discover books together.
           </p>
+          <Link
+            href="/book-clubs/invitations"
+            className="inline-block rounded-full border border-[#D8CCBA] px-4 py-3 text-sm text-[#75634D] transition hover:bg-[#EEE6D9]"
+          >
+              My invitations
+          </Link>
         </header>
+        <ClubInvitations />
 
         {message && (
           <p

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Person = { id: string; username: string };
+type ClubSummary = { id: string; name: string; created_by: string};
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -15,6 +16,7 @@ export default function ProfilePage() {
   const [memberSince, setMemberSince] = useState("");
   const [profile, setProfile] = useState<Person | null>(null);
   const [friends, setFriends] = useState<Person[]>([]);
+  const [clubs, setClubs] = useState<ClubSummary[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [bookCount, setBookCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -60,6 +62,13 @@ export default function ProfilePage() {
       .eq("owner_id", user.id);
 
     setBookCount(count ?? 0);
+
+    const { data: clubData } = await supabase
+      .from("book_clubs")
+      .select("id, name, created_by")
+      .order("name", { ascending: true });
+
+    setClubs((clubData ?? []) as ClubSummary[]);
 
     const { data: rows, error: rowsError } = await supabase
       .from("friendships")
@@ -331,9 +340,37 @@ export default function ProfilePage() {
               <p className="mt-2 text-sm italic text-[#8C7D6A]">Coming soon.</p>
             </section>
 
-            <section className="rounded-2xl border border-dashed border-[#DCCFBD] p-6">
-              <h2 className="font-serif text-2xl">Book clubs</h2>
-              <p className="mt-2 text-sm italic text-[#8C7D6A]">Coming soon.</p>
+                        <section className="rounded-2xl border border-[#E5D8C5] bg-white/80 p-6">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-serif text-2xl">
+                  Book clubs ({clubs.length})
+                </h2>
+                <Link href="/book-clubs" className="text-sm underline">
+                  All book clubs
+                </Link>
+              </div>
+
+              {clubs.length === 0 ? (
+                <p className="mt-3 text-sm italic text-[#786956]">
+                  You&apos;re not in any book clubs yet.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {clubs.map((club) => (
+                    <li key={club.id}>
+                      <Link
+                        href={`/book-clubs/${club.id}`}
+                        className="flex items-center justify-between rounded-xl border border-[#E5D8C5] bg-[#FAF5ED] px-4 py-3 text-sm hover:bg-white"
+                      >
+                        <span className="font-medium">{club.name}</span>
+                        <span className="text-xs text-[#8C7D6A]">
+                          {club.created_by === userId ? "Owner" : "Member"} →
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
 
             <section className="pt-2">

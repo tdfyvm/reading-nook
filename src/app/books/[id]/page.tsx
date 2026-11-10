@@ -8,6 +8,7 @@ import CoverField from "@/components/CoverField";
 import { uploadCover } from "@/lib/uploadCover";
 import ReadingDates from "@/components/ReadingDates";
 import BookFormatField from "@/components/Formats";
+import ClubBookLink from "@/components/ClubBookLink";
 
 type BookStatus = "Reading" | "Rereading" | "Read" | "Want to read";
 
@@ -457,6 +458,7 @@ function BookDetailContent() {
 
                   <ReadingDates bookId={book.id} editable />
                   <BookFormatField bookId={book.id} />
+                  <ClubBookLink bookId={book.id} />
 
                   <label className="block text-sm">
                     Genre

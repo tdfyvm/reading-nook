@@ -4,6 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import ClubPolls from "@/components/ClubPolls";
+import ClubBooks from "@/components/ClubBooks";
 
 type Club = {
   id: string;
@@ -29,6 +31,22 @@ function BookClubDetailsContent() {
 
   const [club, setClub] = useState<Club | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+
+  type ClubBook = {
+  id: string;
+  club_id: string;
+  title: string;
+  author: string;
+  cover_id: number | null;
+  status: string;
+  started_on: string | null;
+  finished_on: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+  const [currentBook, setCurrentBook] = useState<ClubBook | null>(null);
+
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +102,25 @@ function BookClubDetailsContent() {
 
       setClub(clubData as Club);
       setMembers((memberData ?? []) as Member[]);
+
+      const { data: bookData, error: bookError } = await supabase
+  .from("club_books")
+  .select(
+    "id, club_id, title, author, cover_id, status, started_on, finished_on, created_by, created_at"
+  )
+  .eq("club_id", id)
+  .eq("status", "current")
+  .maybeSingle();
+
+if (cancelled) return;
+
+if (bookError) {
+  setMessage(bookError.message);
+  setLoading(false);
+  return;
+}
+
+setCurrentBook(bookData as ClubBook | null);
 
       // Accepted friendships in either direction.
       const { data: friendshipData, error: friendshipError } = await supabase
@@ -163,6 +200,44 @@ function BookClubDetailsContent() {
     } else {
       setMessage(`Invitation sent to ${friend.username}!`);
     }
+  }
+
+    async function leaveClub() {
+    if (!window.confirm("Leave this club? You can only come back if you're invited again.")) {
+      return;
+    }
+
+    const { error } = await supabase.rpc("leave_book_club", {
+      p_club_id: id,
+    });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    router.push("/book-clubs");
+  }
+
+  async function removeMember(member: Member) {
+    const name = memberName(member);
+
+    if (!window.confirm(`Remove ${name} from the club?`)) return;
+
+    const { error } = await supabase.rpc("remove_book_club_member", {
+      p_club_id: id,
+      p_user_id: member.user_id,
+    });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMembers((current) =>
+      current.filter((item) => item.user_id !== member.user_id)
+    );
+    setMessage(`${name} was removed from the club.`);
   }
 
   if (loading) {
@@ -281,6 +356,9 @@ function BookClubDetailsContent() {
           </section>
         )}
 
+
+            <ClubBooks clubId={id} isOwner={isOwner} />
+           <ClubPolls clubId={id} isOwner={isOwner} />
         <section className="mt-8 rounded-2xl border border-[#E4D9C8] bg-white/80 p-6">
           <h2 className="font-serif text-2xl">Members</h2>
           <p className="mt-2 text-sm text-[#8C7D6A]">
@@ -294,13 +372,35 @@ function BookClubDetailsContent() {
                 className="flex items-center justify-between rounded-xl bg-[#F8F3EB] p-4"
               >
                 <span className="text-sm">{memberName(member)}</span>
-                <span className="text-xs text-[#8C7D6A]">
-                  {member.role === "owner" ? "Club owner" : "Member"}
-                </span>
+                                <div className="flex items-center gap-4">
+                  <span className="text-xs text-[#8C7D6A]">
+                    {member.role === "owner" ? "Club owner" : "Member"}
+                  </span>
+                  {isOwner && member.user_id !== currentUserId && (
+                    <button
+                      type="button"
+                      onClick={() => void removeMember(member)}
+                      className="text-xs text-red-700 underline"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </section>
+                {!isOwner && (
+          <div className="mt-8">
+            <button
+              type="button"
+              onClick={() => void leaveClub()}
+              className="rounded-full border border-red-200 px-5 py-3 text-sm text-red-700 hover:bg-red-50"
+            >
+              Leave this club
+            </button>
+          </div>
+        )}
       </div>
     </main>
   );

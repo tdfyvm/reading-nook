@@ -11,6 +11,9 @@ import ReadingDates, {
   ReadingDatesDraft,
   type DraftReading,
 } from "@/components/ReadingDates";
+import PollNotifications from "@/components/PollNotifications";
+import { FormatsRead } from "@/components/Formats";
+import ClubBookLink from "@/components/ClubBookLink";
 
 type BookStatus = "Reading" | "Rereading" | "Read" | "Want to read";
 
@@ -998,7 +1001,7 @@ setBooks((current) =>
   </div>
 </header>
 
-
+            <PollNotifications />
           <div className="mb-10 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard label="Total books" value={counts.all} icon="📚" />
             <StatCard label="Currently reading" value={counts.reading} icon="☕" />
@@ -1600,6 +1603,7 @@ setBooks((current) =>
                         />
 
 <ReadingDates bookId={book.id} editable />
+<ClubBookLink bookId={book.id} />
 
 <div>
   <label className="mb-1 block text-sm font-medium">

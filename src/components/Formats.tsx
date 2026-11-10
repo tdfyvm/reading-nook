@@ -113,18 +113,18 @@ export default function BookFormatField({ bookId }: { bookId: string }) {
 }
 
 /* The stat: completed reading entries grouped by the book's reading version. */
+const READING_VERSIONS = [
+  "Physical copy",
+  "Ebook",
+  "Audiobook",
+  "Library book",
+  "Immersive reading",
+];
+
 export function FormatsRead() {
   const [rows, setRows] = useState<{ format: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  const chartColors = [
-    "#899B78",
-    "#C98F9D",
-    "#D7B46A",
-    "#9AACC0",
-    "#B7A6C9",
-  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -132,21 +132,9 @@ export function FormatsRead() {
     async function load() {
       const {
         data: { user },
-        error: userError,
       } = await supabase.auth.getUser();
 
-      if (userError) {
-        if (!cancelled) {
-          setError("Couldn't identify your account: " + userError.message);
-          setLoading(false);
-        }
-        return;
-      }
-
-      if (!user) {
-        if (!cancelled) setLoading(false);
-        return;
-      }
+      if (!user) return;
 
       const { data: books, error: booksError } = await supabase
         .from("books")
@@ -162,31 +150,31 @@ export function FormatsRead() {
       if (cancelled) return;
 
       if (booksError || readingsError) {
-        setError(
-          "Couldn't load reading versions: " +
-            (booksError ?? readingsError)?.message
-        );
+        setError("Couldn't load formats: " + (booksError ?? readingsError)?.message);
         setLoading(false);
         return;
       }
 
       const versionById = new Map<string, string>();
-
-      (books ?? []).forEach((book) => {
-        const version = book.reading_version as string | null;
-        if (version) versionById.set(book.id as string, version);
-      });
+      (books ?? []).forEach((book) =>
+        versionById.set(
+          book.id as string,
+          (book.reading_version as string | null) ?? ""
+        )
+      );
 
       const counts: Record<string, number> = {};
-
       for (const reading of readings ?? []) {
         const version = versionById.get(reading.book_id as string);
-        if (!version) continue;
-
-        counts[version] = (counts[version] ?? 0) + 1;
+        if (version === undefined) continue;
+        const label = version || "No version set";
+        counts[label] = (counts[label] ?? 0) + 1;
       }
 
-      const ordered = FORMATS
+      const known = [...READING_VERSIONS, "No version set"];
+      const extra = Object.keys(counts).filter((label) => !known.includes(label));
+
+      const ordered = [...known, ...extra]
         .filter((label) => (counts[label] ?? 0) > 0)
         .map((label) => ({ format: label, count: counts[label] }));
 
@@ -201,140 +189,45 @@ export function FormatsRead() {
     };
   }, []);
 
-  if (loading) {
-    return (
-      <section className="mb-10 rounded-2xl border border-[#E9E0D2] bg-white/60 p-5">
-        <p className="text-sm text-[#93836F]">Loading reading formats...</p>
-      </section>
-    );
-  }
-
-  if (error) {
-    return (
+  if (loading || error) {
+    return error ? (
       <p role="alert" className="mb-10 text-sm text-red-700">
         {error}
       </p>
-    );
+    ) : null;
   }
 
-  const total = rows.reduce((sum, row) => sum + row.count, 0);
   const max = Math.max(1, ...rows.map((row) => row.count));
-  const radius = 66;
-  const circumference = 2 * Math.PI * radius;
-  let offset = 0;
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
 
   return (
-    <section className="mb-10 rounded-2xl border border-[#E9E0D2] bg-white/70 p-5 sm:p-7">
-      <div className="mb-6">
-        <h3 className="font-serif text-xl text-[#493D32]">Formats read</h3>
-        <p className="mt-1 text-sm text-[#93836F]">
-          Your reading journey, by format
-        </p>
-      </div>
+    <section className="mb-10 rounded-2xl border border-[#E9E0D2] bg-white/60 p-5">
+      <h3 className="font-serif text-xl">Formats read</h3>
+      <p className="mt-1 text-sm text-[#93836F]">
+        {total} finished {total === 1 ? "read" : "reads"}
+      </p>
 
       {rows.length === 0 ? (
-        <p className="rounded-xl bg-[#F8F3EB] p-4 text-sm italic text-[#93836F]">
-          Finish a book with an end date and set its reading version to see your chart here.
+        <p className="mt-3 text-sm italic text-[#93836F]">
+          Finish a book with an end date and it will show up here.
         </p>
       ) : (
-        <div className="flex flex-col items-center gap-7 sm:flex-row sm:gap-10">
-          <div className="w-full max-w-[230px] shrink-0">
-            <svg
-              viewBox="0 0 180 180"
-              role="img"
-              aria-label={`Donut chart showing ${total} finished reads by reading format`}
-              className="mx-auto w-full"
-            >
-              <circle
-                cx="90"
-                cy="90"
-                r={radius}
-                fill="none"
-                stroke="#EEE6DB"
-                strokeWidth="19"
-              />
-
-              <g transform="rotate(-90 90 90)">
-                {rows.map((row, index) => {
-                  const length = (row.count / total) * circumference;
-                  const segment = (
-                    <circle
-                      key={row.format}
-                      cx="90"
-                      cy="90"
-                      r={radius}
-                      fill="none"
-                      stroke={chartColors[index % chartColors.length]}
-                      strokeWidth="19"
-                      strokeDasharray={`${Math.max(0, length - 2)} ${circumference}`}
-                      strokeDashoffset={-offset}
-                      strokeLinecap="round"
-                    />
-                  );
-
-                  offset += length;
-                  return segment;
-                })}
-              </g>
-
-              <text
-                x="90"
-                y="85"
-                textAnchor="middle"
-                className="fill-[#493D32]"
-                fontSize="31"
-                fontWeight="600"
-              >
-                {total}
-              </text>
-              <text
-                x="90"
-                y="104"
-                textAnchor="middle"
-                className="fill-[#93836F]"
-                fontSize="10"
-              >
-                finished reads
-              </text>
-            </svg>
-          </div>
-
-          <div className="w-full flex-1 space-y-4">
-            {rows.map((row, index) => (
-              <div key={row.format}>
-                <div className="flex items-center gap-3">
-                  <span
-                    className="h-3 w-3 shrink-0 rounded-full"
-                    style={{
-                      backgroundColor:
-                        chartColors[index % chartColors.length],
-                    }}
-                  />
-                  <span className="min-w-0 flex-1 text-sm text-[#493D32]">
-                    {row.format}
-                  </span>
-                  <span className="text-sm font-semibold tabular-nums text-[#493D32]">
-                    {row.count}
-                  </span>
-                  <span className="w-10 text-right text-xs text-[#93836F]">
-                    {Math.round((row.count / total) * 100)}%
-                  </span>
-                </div>
-
-                <div className="ml-6 mt-2 h-1.5 overflow-hidden rounded-full bg-[#EEE6DB]">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${(row.count / max) * 100}%`,
-                      backgroundColor:
-                        chartColors[index % chartColors.length],
-                    }}
-                  />
-                </div>
+        <ul className="mt-4 space-y-3">
+          {rows.map((row) => (
+            <li key={row.format}>
+              <div className="flex justify-between text-sm">
+                <span>{row.format}</span>
+                <span className="text-[#93836F]">{row.count}</span>
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="mt-1 h-3 overflow-hidden rounded-full bg-[#E8DFD2]">
+                <div
+                  className="h-full rounded-full bg-[#8A9A78]"
+                  style={{ width: `${(row.count / max) * 100}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
